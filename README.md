@@ -4,8 +4,11 @@ A queryable model of how a manufacturing business actually runs, synthesized fro
 legacy ERP databases that shipped with no schema documentation, no ERD, and no data
 dictionary.
 
-_Public overview of a private client project. Architecture and method only — the subject
-company, its plants, its ERP vendor, its customers and all figures are omitted deliberately._
+_Public overview of a private client project. The subject company, its plants, its ERP
+vendor and its customers are replaced throughout by stable pseudonyms — `ClientCo`,
+`PlantA`, `PlantB`, `ERP-A` — in the prose and in the [code](code/) alike. All figures are
+omitted. The two extraction scripts are withheld entirely; see [code/README.md](code/README.md)
+for why._
 
 ## The situation
 
