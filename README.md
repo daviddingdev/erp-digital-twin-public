@@ -34,10 +34,30 @@ answered from evidence instead of from someone's recollection.
 
 ## The monthly cycle
 
-```
-snapshot ──▶ delta ──▶ generated views ──▶ verify ──▶ notify
-    │                                          │
- per-entity CSV + metadata           did this actually land?
+```mermaid
+flowchart TB
+  DB1[("plant A ERP<br/><small>read-only, overseas</small>")]:::db
+  DB2[("plant B ERP<br/><small>different schema entirely</small>")]:::db
+  SN["<b>snapshot</b><br/><small>metrics + master extracts<br/>per-section error isolation</small>"]:::c
+  CSV[("dated CSV + run metadata")]:::d
+  DL["<b>delta</b><br/><small>diff the two latest snapshots</small>"]:::c
+  REP[("delta report<br/><small>restatements · equipment · schema<br/>watchlist · red-flag scans</small>")]:::d
+  VW["generated views + wiki"]:::c
+  VF{"<b>verify</b><br/>did the cycle land?"}:::gate
+  OK["notify: cutoffs + what changed"]:::ok
+  BAD["alert, high priority<br/><small>which checks failed, attempt N</small>"]:::bad
+  RT["daily retry<br/><small>no-op on a healthy month</small>"]:::c
+
+  DB1 & DB2 -->|"never bulk-replicated"| SN --> CSV --> DL --> REP --> VW --> VF
+  VF -->|"green"| OK
+  VF -->|"still pending"| BAD --> RT --> SN
+
+  classDef db fill:#2e2e2c,stroke:#8a897f,color:#c3c2b7
+  classDef c fill:#1f3a5c,stroke:#3987e5,color:#e8f0fb
+  classDef d fill:#123f46,stroke:#2ba8b8,color:#dff5f8
+  classDef gate fill:#5c4a1f,stroke:#fab219,color:#fdf3d9
+  classDef ok fill:#1f4a1f,stroke:#0ca30c,color:#e3f7e3
+  classDef bad fill:#5c1f1f,stroke:#e53987,color:#fbe8f0
 ```
 
 **snapshot** captures per-entity metrics and master dumps to dated CSV plus a metadata
@@ -82,6 +102,30 @@ Silent, data-shaped, exit-0 failure is the worst class of bug in any pipeline: t
 keeps telling you it is fine, and the longer it does the more downstream work is built on
 a lie.
 
+The month is now a state machine, and "the scripts ran" is not one of its accepting states:
+
+```mermaid
+stateDiagram-v2
+  [*] --> Pending: cycle opens on schedule
+  Pending --> Verifying: snapshot → delta → views
+  Verifying --> Green: every assertion passes
+  Verifying --> Pending: any assertion fails<br/>(alert, attempt count += 1)
+  Pending --> Verifying: daily retry, once upstream catches up
+  Green --> [*]
+  note right of Verifying
+    asserts the OUTCOME, not the steps:
+    snapshot fresh · zero section errors
+    delta exists · plumbing clean
+    views rebuilt to the new cutoff
+    servers answering
+  end note
+  note left of Pending
+    a byte-identical snapshot
+    is a failure, even though
+    every script exited 0
+  end note
+```
+
 What came out of it:
 
 - **A deterministic verification step** that asserts what the run was supposed to
@@ -122,6 +166,25 @@ The hard part of a digital twin is not extraction. It is refusing to over-claim.
   alongside — never replacing the original. A translated key is a broken join.
 
 ## Intake
+
+```mermaid
+flowchart LR
+  A["forwarded artifacts<br/><small>photos · scans · CAD · certs · patents</small>"]:::i
+  B["structural facts<br/><small>captured as dated notes</small>"]:::i
+  C["monthly DB deltas<br/><small>automated</small>"]:::i
+  D["accounting exports<br/><small>entities off the main ERP</small>"]:::i
+  S[["staging<br/><small>expected to be EMPTY —<br/>a file here is unprocessed work</small>"]]:::s
+  E{"classify:<br/>which entity?"}:::g
+  K{"classify:<br/>which kind?"}:::g
+  W[("entity wiki + assets<br/><small>durable, citable</small>")]:::d
+
+  A & B & C & D --> S --> E --> K --> W
+
+  classDef i fill:#1f3a5c,stroke:#3987e5,color:#e8f0fb
+  classDef s fill:#5c4a1f,stroke:#fab219,color:#fdf3d9
+  classDef g fill:#3b2a5c,stroke:#9d7be8,color:#f0eafd
+  classDef d fill:#1f4a1f,stroke:#0ca30c,color:#e3f7e3
+```
 
 Four channels converge on one staging directory: forwarded artifacts (photos, scans,
 spreadsheets, CAD, certifications, patents), structural facts captured as dated notes,
