@@ -205,4 +205,4 @@ Markdown wiki served locally, with generated views rebuilt each cycle and a stat
 that renders the last verification result. Scheduling is cron: the monthly cycle, a daily
 retry that no-ops when healthy, and a keepalive for the wiki server.
 
-_Last updated August 2026._
+_Last updated September 2026._
