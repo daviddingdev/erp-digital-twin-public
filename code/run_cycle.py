@@ -12,7 +12,9 @@ catches up.
 Modes:
     run_cycle.py            full attempt — the monthly cron entry (3rd, 04:00)
     run_cycle.py --retry    attempt ONLY if the last cycle is still pending
-                            (daily cron; a no-op on a healthy month)
+                            (daily cron; a no-op on a healthy month). Retries stop
+                            after the 5th: the cycle is marked "deferred" with ONE
+                            push, and next month's scheduled run starts fresh.
 
 State lives in logs/cycle_state.json:
     {"cycle": "2026-08", "status": "pending"|"ok", "attempts": N, ...}
@@ -46,6 +48,7 @@ LOCK = LOGS / "cycle.lock"
 CHAIN = ["snapshot.py", "delta.py", "dashboard.py"]
 ENTITIES = ("planta", "plantb")
 MAX_PUSH_LINES = 10
+RETRY_UNTIL_DAY = 5     # daily retries run on the 3rd..5th only; after that, wait for next month
 
 
 # ---------------------------------------------------------------- state
@@ -213,6 +216,26 @@ def main() -> int:
                   f"= {state.get('status', 'unknown')}) — skipping")
             return 0
         cycle = state.get("cycle", cycle)
+        # Retry window is the 3rd..5th only (David 2026-09-08: "if clientco doesn't work by
+        # day 5 of the month just stop pinging and try again next month"). September 2026:
+        # the ERP host was unreachable and six identical daily pages went to his phone.
+        # After the 5th the cycle is DEFERRED — one informational push, then silence until
+        # the next month's scheduled run (which always starts a fresh cycle).
+        today = date.today()
+        if today.day > RETRY_UNTIL_DAY or cycle != today.strftime("%Y-%m"):
+            save_state(cycle=cycle, status="deferred", attempts=state.get("attempts", 0),
+                       last_attempt=state.get("last_attempt"), last_fail=state.get("last_fail", []),
+                       note=f"not retried after the {RETRY_UNTIL_DAY}th; next attempt is next "
+                            f"month's scheduled cycle. Deferred = intentional, not an issue.")
+            push("clientco", f"ClientCo refresh deferred to next month - {cycle}",
+                 f"{state.get('attempts', 0)} attempts through the {RETRY_UNTIL_DAY}th, last failure: "
+                 f"{', '.join(state.get('last_fail', [])) or 'unknown'}.\n"
+                 f"No more retries or pages this month. Run it by hand once IT restores the host:\n"
+                 f"cd ~/clientco-db && ./.venv/bin/python scripts/run_cycle.py",
+                 tags="zzz")
+            print(f"retry: cycle {cycle} still pending after the {RETRY_UNTIL_DAY}th — "
+                  f"DEFERRED to next month, no further pages")
+            return 0
         print(f"retry: cycle {cycle} still pending after "
               f"{state.get('attempts', 0)} attempt(s) — re-running")
 
