@@ -12,7 +12,7 @@ from datetime import date
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
-ENTITIES = ["planta", "plantb", "usa", "group"]
+ENTITIES = ["planta", "plantb", "singapore", "usa", "group"]
 SNAPSHOT_ENTITIES = ["planta", "plantb"]
 
 
@@ -92,11 +92,14 @@ def recent_logs():
         log = ROOT / e / "wiki" / "log.md"
         if not log.exists():
             continue
-        last = None
-        for line in log.read_text(encoding="utf-8").splitlines():
-            if line.startswith("## ["):
-                last = line
-        print(f"  {e:10s} {(last or '(no entries)').lstrip('# ')}")
+        # Pick the NEWEST entry by its date, not the last line in the file. The entity
+        # logs disagree about direction — usa/ is newest-first by its own README, the
+        # factory logs append at the end — and reading positionally showed a stale
+        # 2026-05-25 entry for usa on the day it was ingested (caught 2026-09-21).
+        entries = [l for l in log.read_text(encoding="utf-8").splitlines()
+                   if l.startswith("## [")]
+        newest = max(entries, key=lambda l: l[4:14]) if entries else None
+        print(f"  {e:10s} {(newest or '(no entries)').lstrip('# ')}")
 
 
 def main():
