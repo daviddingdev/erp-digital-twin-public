@@ -12,6 +12,9 @@ Endpoints:
                    queries the China standby — locked against concurrent runs)
   GET  /edit?p=    HTML editor for one .md file (whitelisted paths only)
   POST /save       write the file IF changed + git commit it ("ui-edit: ...")
+  GET  /file?p=    download one file from an allowlisted folder (FILE_DIRS), as an
+                   attachment — tailnet and localhost clients only. Added 2026-09-27 for
+                   the interview workbooks (hbs memo): David gets every file as a link.
 
 Security model: binds 0.0.0.0 — same LAN/Tailscale trust domain as the wiki
 itself (which already renders the financials this can edit). Every save is a
@@ -19,6 +22,7 @@ git commit, so any edit is attributable and revertible. Generated pages
 (dashboard.md / data_summary.md / board) are not editable — they'd be clobbered
 by the next monthly run.
 """
+import ipaddress
 import json
 import os
 import subprocess
@@ -33,6 +37,13 @@ LOCK = ROOT / "logs" / ".snapshot_running"
 PORT = 8001
 GENERATED = {"group/wiki/dashboard.md", "group/wiki/data_summary.md"}
 NO_EDIT_TOP = {"_archive", "board", "docs", "logs", "site"}
+# /file serves only these folders and types. The wiki itself (:8000) excludes derived/ and
+# spreadsheets on purpose, so this is a separate, narrower door: private family financials,
+# so the client check below refuses anything that is not the tailnet or this machine.
+FILE_DIRS = {"group/derived/interview"}
+FILE_TYPES = {".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              ".pdf": "application/pdf"}
+TAILNET = ipaddress.ip_network("100.64.0.0/10")
 
 
 def run(cmd, timeout=600):
@@ -129,6 +140,35 @@ def safe_md(rel):
     return p, None
 
 
+def safe_file(rel):
+    """Resolve a /file path; return (Path|None, error|None). Allowlisted folders only."""
+    if not rel or "\x00" in rel:
+        return None, "no path"
+    p = (ROOT / rel).resolve()
+    try:
+        rp = p.relative_to(ROOT)
+    except ValueError:
+        return None, "outside repo"
+    if rp.parent.as_posix() not in FILE_DIRS:
+        return None, "not a downloadable folder"
+    if p.suffix.lower() not in FILE_TYPES:
+        return None, "file type not served"
+    if not p.is_file():
+        return None, "no such file"
+    return p, None
+
+
+def client_ok(addr):
+    """Tailnet (100.64.0.0/10) or loopback. The LAN is not enough for /file."""
+    try:
+        ip = ipaddress.ip_address(addr.split("%")[0])
+    except ValueError:
+        return False
+    if ip.version == 6 and ip.ipv4_mapped:
+        ip = ip.ipv4_mapped
+    return ip.is_loopback or ip in TAILNET
+
+
 EDIT_HTML = """<!doctype html><html><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>edit · {rel}</title>
 <style>body{{margin:0;background:#f2f4f8;font-family:-apple-system,'Segoe UI',Roboto,sans-serif;color:#1c2733}}
@@ -189,8 +229,25 @@ class H(BaseHTTPRequestHandler):
                                     .replace("&", "&amp;").replace("<", "&lt;"),
                                     back=back, today=date.today().isoformat())
             self._send(200, html, "text/html; charset=utf-8")
+        elif u.path == "/file":
+            if not client_ok(self.client_address[0]):
+                self._send(403, "file downloads are tailnet-only")
+                return
+            rel = urllib.parse.parse_qs(u.query).get("p", [""])[0]
+            p, err = safe_file(rel)
+            if err:
+                self._send(404 if err == "no such file" else 403, f"cannot serve: {err}")
+                return
+            data = p.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", FILE_TYPES[p.suffix.lower()])
+            self.send_header("Content-Disposition", f'attachment; filename="{p.name}"')
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
         else:
-            self._send(404, "wiki_ctl: /status /edit?p= (GET) · /rebuild /snapshot /save (POST)")
+            self._send(404, "wiki_ctl: /status /edit?p= /file?p= (GET) · /rebuild /snapshot /save (POST)")
 
     def do_POST(self):
         n = int(self.headers.get("Content-Length", 0))
