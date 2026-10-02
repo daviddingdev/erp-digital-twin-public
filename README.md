@@ -49,7 +49,7 @@ flowchart TB
   VF{"<b>verify</b><br/>did the cycle land?"}:::gate
   OK["notify: cutoffs + what changed"]:::ok
   BAD["alert, high priority<br/><small>which checks failed, attempt N</small>"]:::bad
-  RT["daily retry<br/><small>no-op on a healthy month</small>"]:::c
+  RT["daily retry<br/><small>a short window, then deferred with one notice</small>"]:::c
 
   DB1 & DB2 -->|"never bulk-replicated"| SN --> CSV --> DL --> REP --> VW --> VF
   VF -->|"green"| OK
@@ -114,7 +114,9 @@ stateDiagram-v2
   Verifying --> Green: every assertion passes
   Verifying --> Pending: any assertion fails<br/>(alert, attempt count += 1)
   Pending --> Verifying: daily retry, once upstream catches up
+  Pending --> Deferred: retry window closes (one notice, then quiet)
   Green --> [*]
+  Deferred --> [*]
   note right of Verifying
     asserts the OUTCOME, not the steps:
     snapshot fresh · zero section errors
