@@ -157,6 +157,18 @@ def success_message() -> str:
     return "\n".join(lines)
 
 
+def refresh_views() -> None:
+    """The app's model and the static wiki, rebuilt from the new snapshot. Neither can fail the
+    cycle: the snapshot has landed, and the app and the keepalive rebuild on their own when stale."""
+    for cmd in ([str(PY), str(ROOT / "model" / "build.py")],
+                [str(ROOT / "scripts" / "build_wiki.sh"), "--force"]):
+        try:
+            p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=300)
+            print(((p.stdout or "") + (p.stderr or "")).strip() or f"{cmd[-1]}: rc {p.returncode}", flush=True)
+        except Exception as e:  # noqa: BLE001
+            print(f"view refresh skipped ({cmd[0]}): {e}", flush=True)
+
+
 # ---------------------------------------------------------------- main
 
 def attempt(cycle: str, prior_attempts: int) -> int:
@@ -181,6 +193,7 @@ def attempt(cycle: str, prior_attempts: int) -> int:
     if ok:
         save_state(cycle=cycle, status="ok", attempts=attempts, last_attempt=stamp,
                    last_fail=[])
+        refresh_views()
         push("clientco", f"ClientCo refresh landed - {cycle}", success_message(),
              tags="factory")
         print("CYCLE OK")
