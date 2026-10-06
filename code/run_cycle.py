@@ -34,6 +34,7 @@ import os
 import re
 import subprocess
 import sys
+import urllib.request
 from datetime import date
 from pathlib import Path
 
@@ -45,6 +46,7 @@ PY = ROOT / ".venv" / "bin" / "python"
 LOGS = ROOT / "logs"
 STATE = LOGS / "cycle_state.json"
 LOCK = LOGS / "cycle.lock"
+EGRESS = LOGS / "egress_ip.json"   # the Spark's public IPv4 as of the last cycle that landed
 CHAIN = ["snapshot.py", "delta.py", "dashboard.py"]
 ENTITIES = ("planta", "plantb")
 MAX_PUSH_LINES = 10
@@ -74,6 +76,40 @@ def run_step(script: str) -> tuple[bool, str]:
     out = (p.stdout or "") + (p.stderr or "")
     print(out, end="", flush=True)
     return p.returncode == 0, out
+
+
+def egress_ip() -> str | None:
+    """The Spark's public IPv4: the address the ERP's firewall sees, and must whitelist."""
+    try:
+        with urllib.request.urlopen("https://api.ipify.org", timeout=10) as r:
+            ip = r.read().decode().strip()
+        return ip if re.fullmatch(r"\d{1,3}(\.\d{1,3}){3}", ip) else None
+    except Exception:
+        return None
+
+
+def egress_note(out: str) -> str:
+    """When the ERP host times out, say whether the Spark's IP has moved off the one that last
+    worked. Sept–Oct 2026: Verizon re-addressed the Spark (.123 -> .164), the host timed out for
+    two cycles, and IT, pinging the old address, reported the connection normal."""
+    if "Connection timed out" not in out and "20009" not in out:
+        return ""
+    now = egress_ip()
+    try:
+        last = json.loads(EGRESS.read_text())
+    except Exception:
+        last = {}
+    if not now:
+        return "Could not look up the Spark's public IP."
+    if not last.get("ip"):
+        return (f"The Spark's public IP is {now}; no record of the IP the last good cycle came "
+                f"from, so ask IT whether {now} is the one whitelisted on port 4369.")
+    if last["ip"] != now:
+        return (f"The Spark's public IP is now {now}; the last cycle that landed came from "
+                f"{last['ip']} ({last.get('seen', '?')}). The ERP's firewall whitelists by IP: "
+                f"ask IT to whitelist {now} on port 4369.")
+    return (f"The Spark's public IP is unchanged ({now}), so the block is on the ERP side: "
+            f"host down, port 4369 closed, or the whitelist entry dropped.")
 
 
 def failing_checks() -> list[str]:
@@ -179,13 +215,17 @@ def attempt(cycle: str, prior_attempts: int) -> int:
         ok, out = run_step(script)
         if not ok:
             tail = "\n".join(out.strip().splitlines()[-6:]) or "(no output)"
+            note = egress_note(out)
             save_state(cycle=cycle, status="pending", attempts=attempts,
-                       last_attempt=stamp, last_fail=[f"{script} crashed"])
+                       last_attempt=stamp, last_fail=[f"{script} crashed"] + ([note] if note else []))
             push("alerts",
                  f"ClientCo refresh FAILED - {script}",
-                 f"Attempt {attempts} for cycle {cycle} died in {script}.\n\n{tail}\n\n"
+                 f"Attempt {attempts} for cycle {cycle} died in {script}.\n\n"
+                 + (f"{note}\n\n" if note else "") + f"{tail}\n\n"
                  f"Retrying daily. Log: logs/refresh.log",
                  priority="high", tags="rotating_light")
+            if note:
+                print(note)
             print(f"CYCLE ABORTED in {script}")
             return 1
 
@@ -193,6 +233,9 @@ def attempt(cycle: str, prior_attempts: int) -> int:
     if ok:
         save_state(cycle=cycle, status="ok", attempts=attempts, last_attempt=stamp,
                    last_fail=[])
+        ip = egress_ip()
+        if ip:
+            EGRESS.write_text(json.dumps({"ip": ip, "seen": stamp}))
         refresh_views()
         push("clientco", f"ClientCo refresh landed - {cycle}", success_message(),
              tags="factory")
