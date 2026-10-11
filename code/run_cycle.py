@@ -21,7 +21,10 @@ State lives in logs/cycle_state.json:
 
 Notifications (scripts/ntfy.py, topics in ~/maintenance/config/ntfy.json):
     success -> `clientco`  "refresh landed" + cutoffs + what changed this month
-    failure -> `alerts`   which checks failed + attempt count (urgent priority)
+    failure -> `alerts`   which checks failed + attempt count — pages on the cycle's FIRST
+                          failure only; a retry that fails again goes to the 23:00 digest
+                          (David 2026-10-04: "mute excessive clientco notifications")
+    deferred -> `clientco` digest tier, once, after the 5th
 
 Exit code 0 = cycle green (or retry skipped), 1 = still broken.
 """
@@ -109,7 +112,9 @@ def egress_note(out: str) -> str:
                 f"{last['ip']} ({last.get('seen', '?')}). The ERP's firewall whitelists by IP: "
                 f"ask IT to whitelist {now} on port 4369.")
     return (f"The Spark's public IP is unchanged ({now}), so the block is on the ERP side: "
-            f"host down, port 4369 closed, or the whitelist entry dropped.")
+            f"host down, port 4369 closed, the whitelist entry dropped, or the factory's ISP "
+            f"blocking the Spark's address range (Oct 2026: the ISP blocked the Spark's whole /24; "
+            f"see logs/cycle_state.json and group/wiki/log.md 2026-10-07).")
 
 
 def failing_checks() -> list[str]:
@@ -207,6 +212,12 @@ def refresh_views() -> None:
 
 # ---------------------------------------------------------------- main
 
+def repeat_tier(attempts: int) -> str | None:
+    """One page per cycle: the first failure pages (policy tier); every later attempt of the
+    same cycle rides the 23:00 digest. The failure stays in refresh.log and cycle_state.json."""
+    return None if attempts <= 1 else "digest"
+
+
 def attempt(cycle: str, prior_attempts: int) -> int:
     attempts = prior_attempts + 1
     stamp = date.today().isoformat()
@@ -219,11 +230,12 @@ def attempt(cycle: str, prior_attempts: int) -> int:
             save_state(cycle=cycle, status="pending", attempts=attempts,
                        last_attempt=stamp, last_fail=[f"{script} crashed"] + ([note] if note else []))
             push("alerts",
-                 f"ClientCo refresh FAILED - {script}",
+                 f"ClientCo refresh FAILED - {script}"
+                 + ("" if attempts == 1 else f" (attempt {attempts}, still failing)"),
                  f"Attempt {attempts} for cycle {cycle} died in {script}.\n\n"
                  + (f"{note}\n\n" if note else "") + f"{tail}\n\n"
                  f"Retrying daily. Log: logs/refresh.log",
-                 priority="high", tags="rotating_light")
+                 priority="high", tags="rotating_light", tier=repeat_tier(attempts))
             if note:
                 print(note)
             print(f"CYCLE ABORTED in {script}")
@@ -251,7 +263,7 @@ def attempt(cycle: str, prior_attempts: int) -> int:
                "the retry clears itself once it does."
                if any("plumbing" in f for f in fails) else ""))
     push("alerts", f"ClientCo refresh needs attention - {cycle}", body,
-         priority="high", tags="warning")
+         priority="high", tags="warning", tier=repeat_tier(attempts))
     print("CYCLE FAILED")
     return 1
 
@@ -288,7 +300,7 @@ def main() -> int:
                  f"{', '.join(state.get('last_fail', [])) or 'unknown'}.\n"
                  f"No more retries or pages this month. Run it by hand once IT restores the host:\n"
                  f"cd ~/clientco-db && ./.venv/bin/python scripts/run_cycle.py",
-                 tags="zzz")
+                 tags="zzz", tier="digest")
             print(f"retry: cycle {cycle} still pending after the {RETRY_UNTIL_DAY}th — "
                   f"DEFERRED to next month, no further pages")
             return 0
