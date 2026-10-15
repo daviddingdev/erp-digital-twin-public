@@ -199,9 +199,10 @@ def success_message() -> str:
 
 
 def refresh_views() -> None:
-    """The app's model and the static wiki, rebuilt from the new snapshot. Neither can fail the
+    """The app's model, the QoE pack (clientco-db/qoe) and the static wiki, rebuilt from the new snapshot. None can fail the
     cycle: the snapshot has landed, and the app and the keepalive rebuild on their own when stale."""
     for cmd in ([str(PY), str(ROOT / "model" / "build.py")],
+                [str(PY), str(ROOT / "group" / "scripts" / "59_qoe_from_snapshot.py")],   # clientco-db/qoe
                 [str(ROOT / "scripts" / "build_wiki.sh"), "--force"]):
         try:
             p = subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, timeout=300)
